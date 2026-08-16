@@ -156,6 +156,7 @@ type GrillPhase =
 interface GrillState {
   topic: string;
   runId: string;
+  cwd: string;
   asyncDir?: string;
   contextPath?: string;
   contextBytes: number;
@@ -523,6 +524,7 @@ async function startGrill(
   const state: GrillState = {
     topic,
     runId: randomUUID().slice(0, 8),
+    cwd,
     contextPath,
     contextBytes,
     questions: [],
@@ -860,13 +862,14 @@ async function startReview(pi: ExtensionAPI, sessionId: string, state: GrillStat
 /** 评审结果就绪：解析分数，决定 finalize 还是追问。 */
 async function onReviewReady(pi: ExtensionAPI, sessionId: string, state: GrillState, cwd?: string) {
   if (state.phase !== "reviewing" || !state.reviewRunId) return;
+  const dir = cwd ?? state.cwd;
   console.log(`[${PLUGIN}] onReviewReady: 读取评审输出…`);
   const raw = await readChildOutput(state.reviewAsyncDir, state.reviewRunId, undefined);
   const parsed = extractReviewFromText(raw);
   if (!parsed) {
     console.error(`[${PLUGIN}] 评审输出解析失败，跳过评审直接交付。原始输出: ${raw.slice(0, 200)}`);
     state.reviewRounds += 1;
-    if (cwd) await finalizeReport(pi, sessionId, state, cwd);
+    if (dir) await finalizeReport(pi, sessionId, state, dir);
     return;
   }
   state.reviewScores = parsed.scores;
@@ -878,7 +881,7 @@ async function onReviewReady(pi: ExtensionAPI, sessionId: string, state: GrillSt
   console.log(`[${PLUGIN}] 评审完成：${state.questions.length} 题中 weak ${weak.length} 题（rounds=${state.reviewRounds}）`);
 
   if (weak.length === 0 || state.reviewRounds >= MAX_REVIEW_ROUNDS) {
-    if (cwd) await finalizeReport(pi, sessionId, state, cwd);
+    if (dir) await finalizeReport(pi, sessionId, state, dir);
     return;
   }
 
@@ -1192,6 +1195,7 @@ function persistSnapshot(pi: ExtensionAPI, customType: string, state: GrillState
     pi.appendEntry(customType, {
       topic: state.topic,
       runId: state.runId,
+      cwd: state.cwd,
       contextPath: state.contextPath,
       contextBytes: state.contextBytes,
       reportPath: state.reportPath,
@@ -1245,6 +1249,7 @@ export default function (pi: ExtensionAPI) {
       if (!data || typeof data !== "object") continue;
       state.topic = typeof data.topic === "string" ? data.topic : state.topic;
       state.runId = typeof data.runId === "string" ? data.runId : state.runId;
+      state.cwd = typeof data.cwd === "string" ? data.cwd : state.cwd;
       state.contextPath = typeof data.contextPath === "string" ? data.contextPath : undefined;
       state.contextBytes = typeof data.contextBytes === "number" ? data.contextBytes : 0;
       state.reportPath = typeof data.reportPath === "string" ? data.reportPath : undefined;
@@ -1281,6 +1286,7 @@ export default function (pi: ExtensionAPI) {
     return {
       topic: "",
       runId: "",
+      cwd: "",
       contextBytes: 0,
       questions: [],
       answers: new Map(),

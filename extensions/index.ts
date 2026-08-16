@@ -1380,14 +1380,20 @@ export default function (pi: ExtensionAPI) {
     }
   });
 
-  function emptyState(): GrillState {
+  /** GRILL_MAX_ROUNDS 环境变量可调轮数上限（测试/演示用；缺省 MAX_ROUNDS）。 */
+function envMaxRounds(): number {
+  const n = Number(process.env.GRILL_MAX_ROUNDS);
+  return Number.isFinite(n) && n >= 1 && n <= MAX_ROUNDS ? Math.floor(n) : MAX_ROUNDS;
+}
+
+function emptyState(): GrillState {
     return {
       topic: "",
       runId: "",
       cwd: "",
       sessionId: "",
       round: 0,
-      maxRounds: MAX_ROUNDS,
+      maxRounds: envMaxRounds(),
       contextBytes: 0,
       questions: [],
       answers: new Map(),

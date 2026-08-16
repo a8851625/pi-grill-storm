@@ -1,0 +1,12 @@
+{
+  "name": "grill-storm",
+  "version": "0.1.0",
+  "description": "grill-storm: subagent 以 grill-me 技能拷问主 agent 的计划/设计，主 agent 自动选择并回答，生成报告作为后续上下文",
+  "private": true,
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "^0.80.10",
+    "@earendil-works/pi-ai": "^0.80.10",
+    "@earendil-works/pi-tui": "^0.80.10",
+    "typebox": "^1.1.38"
+  }
+}

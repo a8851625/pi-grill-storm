@@ -1,6 +1,6 @@
 {
   "name": "pi-grill-storm",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "grill-storm：subagent 以 grill-me 技能拷问主 agent 的计划/设计，主 agent 自动逐题选择（接受/修订后接受/拒绝）并作答，交付完整问题清单+回答报告，可注入后续会话复用。",
   "keywords": [
     "pi-package",
@@ -17,10 +17,16 @@
     "url": "https://github.com/a8851625/pi-grill-storm.git"
   },
   "pi": {
-    "extensions": ["extensions"],
-    "skills": ["skills"],
+    "extensions": [
+      "extensions"
+    ],
+    "skills": [
+      "skills"
+    ],
     "subagents": {
-      "agents": ["agents"]
+      "agents": [
+        "agents"
+      ]
     }
   },
   "peerDependencies": {

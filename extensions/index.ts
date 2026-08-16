@@ -48,6 +48,8 @@ const MAX_FOLLOW_UPS = 2;           // 单轮未答补催上限
 const MAX_CONTEXT_CHARS = 60_000;
 const MAX_ROUNDS = 8;               // 一问一答最多提问轮数（不含终局审判）
 const ARTIFACT_MAX_AGE_DAYS = 7;    // /grill-cleanup --artifacts 的过期阈值（M4）
+const MAX_ASK_RETRIES = 2;          // 单轮提问输出解析失败后的重试（子代理 paused/半写产物兜底）
+const MAX_JUDGE_RETRIES = 1;        // 终局审判解析失败后的重试
 
 /** 弱答案弱信号词（启发式闭合检测兜底，startJudge 前/无终局判定时用）。 */
 const WEAK_ANSWER_MARKS = ["未验证", "未知", "待定", "不清楚", "需要调研", "后续", "到时候"];
@@ -138,7 +140,7 @@ interface Verdict {
   judgment: string;
 }
 
-type GrillPhase = "idle" | "spawned" | "answering" | "judging" | "done" | "failed";
+type GrillPhase = "idle" | "spawned" | "answering" | "judging" | "retrying" | "done" | "failed";
 
 interface AskOutput {
   question?: GrilledQuestion;
@@ -174,6 +176,8 @@ interface GrillState {
   judgeRunId?: string;
   judgeAsyncDir?: string;
   followUpsSent: number;
+  askRetries: number;
+  judgeRetries: number;
   prevActiveTools: string[];
   pollTimer?: NodeJS.Timeout;
   gate?: "ok" | "blocked";
@@ -712,7 +716,6 @@ async function spawnJudge(pi: ExtensionAPI, sessionId: string, state: GrillState
     await finalizeReport(pi, sessionId, state, state.cwd);
   }
 }
-
 /** 本轮提问产物就绪：解析单问，注入主 agent 或进入审判/下一轮。 */
 async function onAskReady(pi: ExtensionAPI, sessionId: string, state: GrillState) {
   if (state.phase !== "spawned") return;
@@ -720,8 +723,20 @@ async function onAskReady(pi: ExtensionAPI, sessionId: string, state: GrillState
   const raw = await readChildOutput(state.asyncDir, state.askRunId, state.askRawPath);
   const parsed = extractAskFromText(raw);
   if (!parsed) {
+    // 子代理 paused / 半写产物：限次重试（重新 spawn 同一轮，轮次幂等）
+    if (state.askRetries < MAX_ASK_RETRIES) {
+      state.askRetries += 1;
+      state.phase = "retrying";
+      state.updatedAt = Date.now();
+      persistSnapshot(pi, "grill-storm", state);
+      console.log(`[${PLUGIN}] 第 ${state.round + 1} 轮提问输出解析失败，30s 后重新 spawn（${state.askRetries}/${MAX_ASK_RETRIES}）…`);
+      setTimeout(async () => {
+        if (state.phase === "retrying") await spawnAsk(pi, sessionId, state);
+      }, 30_000);
+      return;
+    }
     state.phase = "failed";
-    state.error = `无法解析第 ${state.round + 1} 轮提问输出。原始输出: ${raw.slice(0, 200)}`;
+    state.error = `无法解析第 ${state.round + 1} 轮提问输出（已重试 ${MAX_ASK_RETRIES} 次）。`;
     persistSnapshot(pi, "grill-storm", state);
     return;
   }
@@ -791,7 +806,18 @@ async function onJudgeReady(pi: ExtensionAPI, sessionId: string, state: GrillSta
   const raw = await readChildOutput(state.judgeAsyncDir, state.judgeRunId, undefined);
   const parsed = extractVerdictsFromText(raw);
   if (!parsed) {
-    console.error(`[${PLUGIN}] 审判输出解析失败，改用启发式闭合判定交付。原始输出: ${raw.slice(0, 200)}`);
+    if (state.judgeRetries < MAX_JUDGE_RETRIES) {
+      state.judgeRetries += 1;
+      state.phase = "retrying";
+      state.updatedAt = Date.now();
+      persistSnapshot(pi, "grill-storm", state);
+      console.log(`[${PLUGIN}] 审判输出解析失败，30s 后重新 spawn 审判（${state.judgeRetries}/${MAX_JUDGE_RETRIES}）…`);
+      setTimeout(async () => {
+        if (state.phase === "retrying") await spawnJudge(pi, sessionId, state);
+      }, 30_000);
+      return;
+    }
+    console.error(`[${PLUGIN}] 审判输出解析失败（已重试），改用启发式闭合判定交付。原始输出: ${raw.slice(0, 200)}`);
     if (dir) await finalizeReport(pi, sessionId, state, dir);
     return;
   }
@@ -853,8 +879,10 @@ function schedulePolling(pi: ExtensionAPI, sessionId: string, state: GrillState)
   }, 5_000);
 }
 
-/** 读取子代理输出：优先 structured-output，其次 output 文件，再其次 result.json / asyncDir 日志。 */
+/** 读取子代理输出：优先 structured-output，其次 output 文件，再其次 result.json / asyncDir 日志。
+ *  候选内容必须具 JSON 产物特征（含 questions/verdicts 键），过滤日志类垃圾。 */
 async function readChildOutput(asyncDir: string | undefined, runId: string, rawPath: string | undefined): Promise<string> {
+  const candidates: string[] = [];
   if (asyncDir) {
     const soRoot = path.join(asyncDir, "structured-output");
     if (fs.existsSync(soRoot)) {
@@ -862,42 +890,41 @@ async function readChildOutput(asyncDir: string | undefined, runId: string, rawP
         const subs = fs.readdirSync(soRoot);
         for (const sub of subs) {
           const out = path.join(soRoot, sub, "output.json");
-          if (fs.existsSync(out)) {
-            return await fs.promises.readFile(out, "utf8");
-          }
+          if (fs.existsSync(out)) candidates.push(await fs.promises.readFile(out, "utf8"));
         }
       } catch {
         // 继续下一个候选
       }
     }
   }
-  const tries: Array<string | undefined> = [];
-  if (rawPath) tries.push(rawPath);
+  if (rawPath && fs.existsSync(rawPath)) candidates.push(await fs.promises.readFile(rawPath, "utf8"));
   if (asyncDir && runId) {
     const resultsDir = path.join(asyncDir, "..", RESULTS_DIR_NAME);
-    tries.push(path.join(resultsDir, `${runId}.json`));
-    tries.push(path.join(asyncDir, "output-0.log"));
-  }
-  for (const file of tries) {
-    if (!file || !fs.existsSync(file)) continue;
-    try {
-      const content = await fs.promises.readFile(file, "utf8");
-      if (file.endsWith(".json") && file.includes(RESULTS_DIR_NAME)) {
+    const resultPath = path.join(resultsDir, `${runId}.json`);
+    if (fs.existsSync(resultPath)) {
+      try {
+        const content = await fs.promises.readFile(resultPath, "utf8");
         const parsed = tryParseJson(content) as {
           results?: Array<{ structuredOutput?: unknown; output?: string; error?: string }>;
           summary?: string;
         } | null;
         if (parsed?.results?.[0]?.structuredOutput) {
-          return JSON.stringify(parsed.results[0].structuredOutput);
+          candidates.push(JSON.stringify(parsed.results[0].structuredOutput));
+        } else if (parsed?.results?.[0]?.output) {
+          candidates.push(parsed.results[0].output);
+        } else if (typeof parsed?.summary === "string") {
+          candidates.push(parsed.summary);
         }
-        if (parsed?.results?.[0]?.output) return parsed.results[0].output;
-        if (typeof parsed?.summary === "string") return parsed.summary;
-      } else {
-        return content;
+      } catch {
+        // 继续下一个候选
       }
-    } catch {
-      // 继续下一个候选
     }
+    const logPath = path.join(asyncDir, "output-0.log");
+    if (fs.existsSync(logPath)) candidates.push(await fs.promises.readFile(logPath, "utf8"));
+  }
+  for (const content of candidates) {
+    // 过滤：必须是带产物键的 JSON 形态（含嵌套），日志/说明文本直接跳过
+    if (/"(questions|verdicts|scores)"\s*:/.test(content)) return content;
   }
   return "";
 }
@@ -960,6 +987,7 @@ async function onAgentSettled(pi: ExtensionAPI, sessionId: string, state: GrillS
 /** 一轮作答完成后：推进下一轮或进入终局审判。 */
 async function continueAfterAnswer(pi: ExtensionAPI, sessionId: string, state: GrillState, cwd: string) {
   state.round += 1;
+  state.askRetries = 0;
   state.updatedAt = Date.now();
   persistSnapshot(pi, "grill-storm", state);
   if (state.round >= state.maxRounds) {
@@ -1189,6 +1217,8 @@ function persistSnapshot(pi: ExtensionAPI, customType: string, state: GrillState
       phase: state.phase,
       error: state.error,
       followUpsSent: state.followUpsSent,
+      askRetries: state.askRetries,
+      judgeRetries: state.judgeRetries,
       gate: state.gate,
       summary: state.summary,
       createdAt: state.createdAt,
@@ -1304,6 +1334,8 @@ export default function (pi: ExtensionAPI) {
       state.jsonPath = typeof data.jsonPath === "string" ? data.jsonPath : undefined;
       state.error = typeof data.error === "string" ? data.error : undefined;
       state.followUpsSent = typeof data.followUpsSent === "number" ? data.followUpsSent : 0;
+      state.askRetries = typeof data.askRetries === "number" ? data.askRetries : 0;
+      state.judgeRetries = typeof data.judgeRetries === "number" ? data.judgeRetries : 0;
       state.gate = data.gate === "ok" || data.gate === "blocked" ? data.gate : undefined;
       state.summary = typeof data.summary === "string" ? data.summary : undefined;
       state.createdAt = typeof data.createdAt === "number" ? data.createdAt : state.createdAt;
@@ -1363,6 +1395,8 @@ export default function (pi: ExtensionAPI) {
       askAsyncDirs: [],
       phase: "idle",
       followUpsSent: 0,
+      askRetries: 0,
+      judgeRetries: 0,
       prevActiveTools: [],
       createdAt: Date.now(),
       startedAt: Date.now(),

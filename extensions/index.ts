@@ -27,7 +27,6 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { randomUUID } from "node:crypto";
-import { fileURLToPath } from "node:url";
 
 /* ------------------------------------------------------------------ */
 /* 常量                                                                */
@@ -35,9 +34,6 @@ import { fileURLToPath } from "node:url";
 
 const PLUGIN = "grill-storm";
 const MANAGED_MARKER = "<!-- managed-by:grill-storm -->";
-
-const BASE_DIR = path.dirname(fileURLToPath(import.meta.url));
-const ASSETS_DIR = path.join(BASE_DIR, "assets");
 
 const RPC_REQUEST_EVENT = "subagents:rpc:v1:request";
 const RPC_REPLY_PREFIX = "subagents:rpc:v1:reply:";
@@ -197,10 +193,15 @@ function renderQuestions(questions: GrilledQuestion[]): string {
 }
 
 /* ------------------------------------------------------------------ */
-/* 资产安装：griller 子代理 + grill-me 技能                            */
+/* 旧版（v0.1 手动拷贝安装）遗留清理                                   */
 /* ------------------------------------------------------------------ */
 
-async function ensureInstalled(): Promise<string[]> {
+/**
+ * v0.2 起资源由 pi package 直接提供（extensions/ skills/ agents/），
+ * 不再拷贝到 ~/.pi/agent。若发现带 managed 标记的旧版拷贝则删除，
+ * 避免用户目录中的旧副本遮蔽包内版本。用户手动改过的（无标记）保留。
+ */
+function cleanupLegacyManagedFiles(): string[] {
   const piAgentDir = process.env.PI_CODING_AGENT_DIR
     ? (process.env.PI_CODING_AGENT_DIR === "~"
         ? os.homedir()
@@ -209,39 +210,24 @@ async function ensureInstalled(): Promise<string[]> {
           : process.env.PI_CODING_AGENT_DIR)
     : path.join(os.homedir(), CONFIG_DIR_NAME, "agent");
 
-  const targets: Array<{ src: string; dst: string }> = [
-    {
-      src: path.join(ASSETS_DIR, "griller.md"),
-      dst: path.join(piAgentDir, "agents", "griller.md"),
-    },
-    {
-      src: path.join(ASSETS_DIR, "grill-me-SKILL.md"),
-      dst: path.join(piAgentDir, "skills", "grill-me", "SKILL.md"),
-    },
+  const targets: string[] = [
+    path.join(piAgentDir, "agents", "griller.md"),
+    path.join(piAgentDir, "skills", "grill-me", "SKILL.md"),
   ];
 
-  const installed: string[] = [];
-  for (const { src, dst } of targets) {
+  const removed: string[] = [];
+  for (const dst of targets) {
     try {
-      const content = await fs.promises.readFile(src, "utf8");
-      let write = false;
-      try {
-        const existing = await fs.promises.readFile(dst, "utf8");
-        // 只有本插件管理的文件才覆盖；用户自定义的保留。
-        write = existing.slice(0, 200).includes(MANAGED_MARKER);
-      } catch {
-        write = true; // 目标不存在
+      const content = fs.readFileSync(dst, "utf8");
+      if (content.slice(0, 200).includes(MANAGED_MARKER)) {
+        fs.rmSync(dst, { force: true });
+        removed.push(dst);
       }
-      if (write) {
-        await fs.promises.mkdir(path.dirname(dst), { recursive: true });
-        await fs.promises.writeFile(dst, content, "utf8");
-      }
-      installed.push(dst);
-    } catch (error) {
-      console.error(`[${PLUGIN}] 安装资产失败 ${dst}:`, error);
+    } catch {
+      // 不存在或不可读则跳过
     }
   }
-  return installed;
+  return removed;
 }
 
 /* ------------------------------------------------------------------ */
@@ -767,11 +753,10 @@ export default function (pi: ExtensionAPI) {
 
     if (!assetsReady) {
       assetsReady = true;
-      void ensureInstalled().then((installed) => {
-        if (installed.length > 0) {
-          console.log(`[${PLUGIN}] 已就绪，资产: ${installed.join(", ")}`);
-        }
-      });
+      const removed = cleanupLegacyManagedFiles();
+      if (removed.length > 0) {
+        console.log(`[${PLUGIN}] 已清理旧版（v0.1 拷贝安装）遗留文件: ${removed.join(", ")}`);
+      }
     }
 
     // 从会话记录恢复上次 grill 快照
@@ -895,7 +880,7 @@ export default function (pi: ExtensionAPI) {
     if (!existing) sessions.set(sessionId, { ...emptyState() });
 
     try {
-      await ensureInstalled();
+      cleanupLegacyManagedFiles();
       const entryTexts = await collectSessionTexts(ctx);
       const state = await startGrill(pi, sessionId, ctx.cwd, args, entryTexts);
       sessions.set(sessionId, state);

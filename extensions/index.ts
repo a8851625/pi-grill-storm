@@ -1005,7 +1005,7 @@ export async function buildReport(state: GrillState, cwd: string): Promise<{ mar
   lines.push(`- 材料: ${state.contextPath ?? "—"}（${state.contextBytes} 字节）`);
   lines.push(`- 问题总数: ${rows.length}｜接受 ${counts.accepted}｜修订后接受 ${counts.revised}｜拒绝 ${counts.rejected}｜未作答 ${counts.skipped}`);
   lines.push(`- Gate: ${gate === "ok" ? "✅ ok" : `⛔ blocked（${reasons.join("；")}）`}`);
-  lines.push(`- 耗时: ${(durationMs / 1000).toFixed(0)}s｜子代理 tokens: ${state.childTokens ?? "—"}｜评审轮: ${state.reviewRounds}/${MAX_REVIEW_ROUNDS}`);
+  lines.push(`- 耗时: ${(durationMs / 1000).toFixed(0)}s｜子代理 tokens: ${state.childTokens ?? "—"}｜追问轮: ${state.reviewRounds}/${MAX_REVIEW_ROUNDS}${reviewScores.length > 0 ? `｜评审: ✓（${reviewScores.length} 题）` : ""}`);
   lines.push("");
   lines.push(`## 问题清单与选择`);
   lines.push("");
@@ -1079,6 +1079,24 @@ export async function buildReport(state: GrillState, cwd: string): Promise<{ mar
 }
 
 async function finalizeReport(pi: ExtensionAPI, sessionId: string, state: GrillState, cwd: string) {
+  // M6：子代理 token 用量（status.json 为准），评审与拷问两轮合计
+  if (!state.childTokens) {
+    let total = 0;
+    let found = false;
+    for (const d of [state.asyncDir, state.reviewAsyncDir]) {
+      if (!d) continue;
+      try {
+        const st = tryParseJson(fs.readFileSync(path.join(d, "status.json"), "utf8")) as { totalTokens?: number } | null;
+        if (st?.totalTokens) {
+          total += st.totalTokens;
+          found = true;
+        }
+      } catch {
+        // 忽略缺状态文件
+      }
+    }
+    state.childTokens = found ? total : undefined;
+  }
   const { markdown, json } = await buildReport(state, cwd);
   const dir = grillDir(cwd);
   await fs.promises.mkdir(dir, { recursive: true });

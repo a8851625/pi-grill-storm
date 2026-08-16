@@ -219,7 +219,7 @@ function cleanupLegacyManagedFiles(): string[] {
   for (const dst of targets) {
     try {
       const content = fs.readFileSync(dst, "utf8");
-      if (content.slice(0, 200).includes(MANAGED_MARKER)) {
+      if (content.includes(MANAGED_MARKER)) {
         fs.rmSync(dst, { force: true });
         removed.push(dst);
       }

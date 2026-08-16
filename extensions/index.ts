@@ -1108,9 +1108,20 @@ async function finalizeReport(pi: ExtensionAPI, sessionId: string, state: GrillS
     for (const d of [...state.askAsyncDirs, state.judgeAsyncDir]) {
       if (!d) continue;
       try {
-        const st = tryParseJson(fs.readFileSync(path.join(d, "status.json"), "utf8")) as { totalTokens?: number } | null;
-        if (st?.totalTokens) {
-          total += st.totalTokens;
+        const st = tryParseJson(fs.readFileSync(path.join(d, "status.json"), "utf8")) as { totalTokens?: unknown } | null;
+        const rawTok = st?.totalTokens;
+        let tok: number | undefined;
+        if (typeof rawTok === "number") {
+          tok = rawTok;
+        } else if (rawTok && typeof rawTok === "object") {
+          // pi-subagents 的 totalTokens 是 {input, output, total} 对象形态
+          const t = rawTok as { total?: unknown; input?: unknown; output?: unknown; inputTokens?: unknown; outputTokens?: unknown };
+          if (typeof t.total === "number") tok = t.total;
+          else if (typeof t.inputTokens === "number" && typeof t.outputTokens === "number") tok = t.inputTokens + t.outputTokens;
+          else if (typeof t.input === "number" && typeof t.output === "number") tok = t.input + t.output;
+        }
+        if (typeof tok === "number" && tok > 0) {
+          total += tok;
           found = true;
         }
       } catch {

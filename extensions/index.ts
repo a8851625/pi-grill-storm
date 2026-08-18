@@ -197,10 +197,12 @@ function depthFactor(bytes: number): number {
   return 1.3;
 }
 
-/** 有效轮数 = 档位基准 × 材料深度因子，clamp 到 [MIN_ROUNDS, MAX_ROUNDS_CAP]。 */
+/** 有效轮数 = 档位基准 × 材料深度因子，clamp 到 [MIN_ROUNDS, MAX_ROUNDS_CAP]。
+ *  max 档以基准为上限（30 封顶，不向上浮动）；其余档位上下浮动。 */
 function effectiveMaxRounds(intensity: GrillIntensity, bytes: number): number {
   const base = INTENSITY_BASE_ROUNDS[intensity] ?? 12;
-  return Math.max(MIN_ROUNDS, Math.min(MAX_ROUNDS_CAP, Math.round(base * depthFactor(bytes))));
+  const computed = Math.max(MIN_ROUNDS, Math.min(MAX_ROUNDS_CAP, Math.round(base * depthFactor(bytes))));
+  return intensity === "max" ? Math.min(computed, base) : computed;
 }
 
 type GrillPhase = "idle" | "spawned" | "answering" | "judging" | "retrying" | "done" | "failed";

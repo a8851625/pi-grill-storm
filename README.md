@@ -21,7 +21,7 @@
 pi install git:github.com/a8851625/pi-grill-storm@<commit-SHA>
 
 # 锁定发布 tag（人类可读别名，移动即失效）
-pi install git:github.com/a8851625/pi-grill-storm@v0.3.1
+pi install git:github.com/a8851625/pi-grill-storm@v0.3.4
 
 # 不锁版本（跟随 main）
 pi install git:github.com/a8851625/pi-grill-storm
@@ -73,7 +73,7 @@ pi remove git:github.com/a8851625/pi-grill-storm
 
 用量自动记录到 `.pi/grill/usage.jsonl`，`/grill-log usage` 可查。
 
-## 工作流（v0.3.1 一问一答）
+## 工作流（v0.3.4 一问一答）
 
 ```
 /grilling  [用户触发]
@@ -86,6 +86,7 @@ pi remove git:github.com/a8851625/pi-grill-storm
   ├─ ③ 终局审判：griller 对每题输出 closed（是否闭合）+ judgment + 整体 summary
   └─ ④ 交付 report-<runId>.md/.json + latest.json（原子写，owner{runId,sessionId}）
        + usage.jsonl（sessionId 行级归属）｜报告含 gate（critical 未闭合=⛔ blocked）、闭合判定、轮次与 token 指标
+       并在会话中显示题数、gate 与全部交付文件路径；用 /grill-load 注入完整报告。
 ```
 
 ## 拷问的硬规则（grill-me 技能）
@@ -115,6 +116,7 @@ pi remove git:github.com/a8851625/pi-grill-storm
 
 ## 决策记录
 
+- **2026-08-21（v0.3.4）**：终局交付无论 gate 状态都会在会话屏幕显示题数、选择统计、gate，以及 Markdown、JSON、`latest.json` 的完整路径；完整报告仍以文件为准，可用 `/grill-load` 注入后续上下文。
 - **2026-08-16（v0.3.1）**：v0.3 拷问+主 agent 讨论后重构——① 一问一答替代"一次 N 题"（batch 是发卷子不是审讯，无对话则无击穿）；② 移除 reviewer（评分职能归拷问者终局审判，子代理减半）；③ 维度软化（8 攻击面从强制清单降为校准提示，防模板化填格子）；④ 拷问承诺项落地：latest.json owner+原子写、runId=会话级 UUIDv4 稳定标识、崩溃恢复闭环（decideResume：nudge/continue/judge/repair）、/grill-cleanup --artifacts（mtime>7 天+活跃 runId 白名单+受保护文件）、critical 未闭合→gate=blocked+显式 notify、异步回调路径集成回归测试、git 锁用 commit SHA（tag 冻结）。
 - **2026-08-16（v0.3）**：落实拷问报告：gate、reviewer rubric、二轮追问、特异性校验、成本/用量记录、报告隔离、显式清理。**待验证假设**（未证）："缺乏对抗性提问是需求质量差的主因"。对照实验设计：同一需求交替 grilling vs checklist，5 个样本比较返工率/缺陷数。
 
@@ -127,7 +129,7 @@ pi remove git:github.com/a8851625/pi-grill-storm
 仓库结构即 pi package 布局：
 
 ```
-extensions/index.ts        # 插件本体（v0.3.1 一问一答）
+extensions/index.ts        # 插件本体（v0.3.4 一问一答）
 skills/grill-me/SKILL.md   # 拷问指南（引用闸门+追问性+终局 rubric）
 agents/griller.md          # 拷问者子代理（唯一）
 ```

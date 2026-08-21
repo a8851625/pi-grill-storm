@@ -1,10 +1,13 @@
 /**
- * grill-storm —— "拷问风暴"插件（v0.3.1）
+ * grill-storm —— "拷问风暴"插件（v0.3.4）
  *
  * 让一个 subagent（griller）以 grill-me 技能**一问一答**地拷问主 agent 的计划/设计：
  * 每轮拷问者基于上一轮回答的未闭合点提出下一问，主 agent 逐题选择并作答，
  * 拷问者自判已无漏洞可打后输出终局判定（每问闭合与否 + 整体总结），
  * 插件生成报告（问题清单 + 选择 + 回答 + 闭合判定）供后续上下文复用。
+ *
+ * v0.3.4 变更：
+ *  - 终局交付无论 gate 状态都会在会话中显示统计、gate 与 Markdown/JSON/latest 文件路径
  *
  * v0.3.1 变更（架构重构 + 拷问承诺项）：
  *  - 一问一答替代"一次 N 题"：状态机 asked→answering→judging→done 轮次循环
@@ -33,7 +36,7 @@ import { randomUUID } from "node:crypto";
 /* ------------------------------------------------------------------ */
 
 const PLUGIN = "grill-storm";
-const PLUGIN_VERSION = "0.3.1";
+const PLUGIN_VERSION = "0.3.4";
 const MANAGED_MARKER = "<!-- managed-by:grill-storm -->";
 
 const RPC_REQUEST_EVENT = "subagents:rpc:v1:request";
@@ -1257,20 +1260,49 @@ async function finalizeReport(pi: ExtensionAPI, sessionId: string, state: GrillS
   persistSnapshot(pi, "grill-storm", state);
   console.log(`[${PLUGIN}] 报告已生成: ${reportPath}`);
 
-  // M7: critical 未闭合 → 显式 notify，不静默
-  const unclosedCritical = (json as { questions: Array<{ id: string; severity: string; closed: boolean }> }).questions
+  const report = json as {
+    meta: {
+      counts: { accepted: number; revised: number; rejected: number; skipped: number };
+      gate: "ok" | "blocked";
+      unclosed: string[];
+    };
+    questions: Array<{ id: string; severity: string; closed: boolean }>;
+  };
+  const unclosedCritical = report.questions
     .filter((q) => q.severity === "critical" && !q.closed)
     .map((q) => q.id);
+  const latestPath = path.join(dir, "latest.json");
+  const gateSummary = report.meta.gate === "ok"
+    ? "Gate: ok"
+    : `Gate: blocked${unclosedCritical.length ? ` (critical 未闭合: ${unclosedCritical.join(", ")})` : ""}`;
+  const delivery = [
+    `[grill-storm] 拷问完成：${report.questions.length} 题，接受 ${report.meta.counts.accepted}，修订后接受 ${report.meta.counts.revised}，拒绝 ${report.meta.counts.rejected}，未作答 ${report.meta.counts.skipped}。`,
+    gateSummary,
+    "交付文件（完整问题、回答与终局判定）：",
+    `- Markdown: ${reportPath}`,
+    `- JSON: ${jsonPath}`,
+    `- Latest: ${latestPath}`,
+    "使用 /grill-load 将最近报告注入后续会话。",
+  ].join("\n");
+
+  // M7: 无论 gate 状态都显式交付；critical 未闭合会在同一条消息中突出显示。
+  pi.sendMessage(
+    {
+      customType: "grill-complete",
+      content: delivery,
+      display: true,
+      details: {
+        gate: report.meta.gate,
+        reportPath,
+        jsonPath,
+        latestPath,
+        unclosedCritical,
+      },
+    },
+    { deliverAs: "followUp", triggerTurn: false },
+  );
   if (unclosedCritical.length > 0) {
     console.warn(`[${PLUGIN}] critical 未闭合: ${unclosedCritical.join(", ")}（gate=blocked）`);
-    pi.sendMessage(
-      {
-        customType: "grill-context",
-        content: `[grill-storm] 拷问结束但存在 **critical 未闭合**（${unclosedCritical.join(", ")}），gate=⛔ blocked。报告: ${reportPath}。进入实现前请先处理这些缺口；必要时重新 /grilling。`,
-        display: true,
-      },
-      { deliverAs: "followUp", triggerTurn: false },
-    );
   }
 }
 
@@ -1817,6 +1849,16 @@ function emptyState(): GrillState {
     box.addChild(new Text(theme.fg("warning", "⚠ 补催：本轮问题尚未作答")));
     if (typeof message.content === "string") {
       box.addChild(new Text(theme.fg("dim", message.content)));
+    }
+    return box;
+  });
+
+  pi.registerMessageRenderer("grill-complete", (message, _opts, theme) => {
+    const details = message.details as { gate?: "ok" | "blocked" } | undefined;
+    const color = details?.gate === "blocked" ? "warning" : "success";
+    const box = new Box(1, 1, (text) => theme.bg("customMessageBg", text));
+    if (typeof message.content === "string") {
+      box.addChild(new Text(theme.fg(color, message.content)));
     }
     return box;
   });

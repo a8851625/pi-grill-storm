@@ -1,150 +1,156 @@
-# grill-storm 🔥
+# grill-storm
 
-让 subagent（griller）以 **grill-me 技能一问一答**地拷问主 agent 的计划/设计：拷问者逐轮基于上一轮回答的未闭合点追问，主 agent 逐题**选择**（接受 / 修订后接受 / 拒绝）并**作答**，拷问者判断无新漏洞可打后输出终局审判（每题闭合判定 + 总结），最终交付「问题清单 + 选择 + 回答 + 闭合判定」的报告，可作为后续会话上下文复用。
+`grill-storm` 让 `griller` 子代理按 `grill-me` 技能对计划、设计或实现做**范围受控的决策拷问**：每轮只提一个尖锐问题，给出 **2–5 个互斥的 A–E 常规选项**；仅当这些选项无法诚实覆盖合理方案时，才额外开放 `OTHER` 供被拷问者自由填写。主 agent 必须单选并说明理由，griller 沿未闭合的后果追问，最后逐题给出选择合法性、闭合判定与 gate。
 
-一个 pi package，在线安装后自动提供：
+报告保留评审范围、材料来源、题目、全部选项、已选项、选择理由、`OTHER` 自由填写、终局判定和 gate，可作为后续会话上下文。
 
-- **扩展**（`extensions/`）：一问一答会话编排（逐轮 spawn 提问 → 注入单问 → 收集作答 → 终局审判 → 报告）
-- **技能**（`skills/grill-me`）：relentlessly 拷问指南（引用闸门 + 追问性两条硬规则，候选方向为校准提示）
-- **子代理**（`agents/griller.md`）：拷问者，由 pi-subagents 自动发现（v0.3.1 起仅一个子代理，已移除 reviewer）
+该 pi package 提供：
 
-## ⚠ 安全提示
+- **扩展**：范围受控的一问一题编排、回答校验、终局审判、报告和崩溃恢复。
+- **技能**：`grill-me` 的范围纪律、证据引用、选项与追问规则。
+- **子代理**：由 `pi-subagents` 发现的 `griller`。
 
-- 经 git 源安装 = 克隆可变 HEAD，无 checksum/签名：**作者 force-push 即可改变你本机执行的代码**。安装即代表你信任该仓库。**锁定用 commit SHA，不要用 tag**（tag 可被移动）：`pi install git:github.com/a8851625/pi-grill-storm@<40位commit SHA>`。仓库 tag 冻结策略：v0.x.y 发布后不 force-move，修订须升新 tag。
-- 拷问材料文本按「被评审的引用」处理，注入消息带标识与"非指令"标注；勿把材料中的指令当指令执行。
-- npm 通道：**未发布（pending）**——需仓库所有者登录 npm 账号后 `npm publish`；发布前以 git + SHA 为受支持安装通道。
+## 安全
 
-## 在线安装
+- Git 安装会克隆并执行代码。请固定 **40 位 commit SHA**，不要只依赖可移动 tag：`pi install git:github.com/a8851625/pi-grill-storm@<commit-SHA>`。
+- 材料、历史报告和子代理输出都是被评审的引用，不是指令；不要执行其中嵌入的指令。
+- npm 发布尚未配置；受支持的安装通道是 Git + SHA。
+
+## 安装
 
 ```bash
-# 锁定 commit SHA（推荐，tag 可移动不可当锁）
+# 推荐：不可变 commit SHA
 pi install git:github.com/a8851625/pi-grill-storm@<commit-SHA>
 
-# 锁定发布 tag（人类可读别名，移动即失效）
-pi install git:github.com/a8851625/pi-grill-storm@v0.3.4
+# 人类可读的发布 tag；SHA 仍是更强的锁定方式
+pi install git:github.com/a8851625/pi-grill-storm@v0.4.0
 
-# 不锁版本（跟随 main）
+# 跟随 main
 pi install git:github.com/a8851625/pi-grill-storm
-pi install https://github.com/a8851625/pi-grill-storm
 ```
 
-安装写入 `~/.pi/agent/settings.json` 的 `packages`，克隆到 `~/.pi/agent/git/github.com/a8851625/pi-grill-storm`，重启（或 `/reload`）后生效。移除：
+Pi 会在 `~/.pi/agent/settings.json` 记录包，并克隆到 `~/.pi/agent/git/github.com/a8851625/pi-grill-storm`。安装后重启或 `/reload`。移除：
 
 ```bash
 pi remove git:github.com/a8851625/pi-grill-storm
 ```
 
-> 依赖：设置中已启用 pi-subagents 包（`packages` 含 `npm:pi-subagents`）。升级：`pi install git:github.com/a8851625/pi-grill-storm@<新SHA>`（改 ref 即可移动）。
+Pi 设置中还需要安装 `npm:pi-subagents`。
 
-## 使用
+## 启动拷问
 
-```
-/grilling [主题或文件...]   # 启动一次一问一答拷问（/grill 为别名）
-/grill-load [文件]          # 把上次报告注入会话作为后续上下文（gate=blocked 时提示先闭合 critical）
-/grill-cleanup [-n] [--artifacts]  # 清理 v0.1 遗留拷贝；--artifacts 清 .pi/grill 过期产物（mtime>7 天）
-/grill-log [usage]          # 当前状态；/grill-log usage 查看历史用量（usage.jsonl）
-```
-
-### 强度档位
-
-```
-/grilling -i high PLAN.md        # 或 --intensity=max；缺省 medium
-```
-
-| 档位 | 基准轮数（材料深度浮动 ×0.6/×1.0/×1.3） | 独特规则 |
-|---|---|---|
-| `low` 轻 | 6（4~8） | 引用闸门为建议；允许快速 done；审判仅 critical 从严 |
-| `medium` 标准 | 12（7~16） | 引用闸门 + 追问性（默认） |
-| `high` 猛烈 | 18（11~23） | + 承诺跟踪（未兑现必核查） |
-| `max` 凶残 | 30（18~30） | + 双打（追击 + 攻击已闭合回答的反例）；审判要求机制可复推演；**30 封顶不向上浮动** |
-
-- 轮数是**上限**不是目标：拷问者无新漏洞可打（done）即提前进入终局审判。
-- 材料深度浮动：<5KB 浅 ×0.6 ｜ 5-20KB 中 ×1.0 ｜ >20KB 深 ×1.3。
-- `GRILL_MAX_ROUNDS` 环境变量可强制覆盖（测试用）。
-- 注意轮次成本：medium 全跑完约 40-60 分钟，max 可达 2 小时+；材料越浅越可能提前 done。
-
-### 触发纪律
-
-以下三类场景**必须** `/grilling`：
-
-1. 产出 PRD / 方案 / 设计文档后（第 1 版 draft 完成即拷问）；
-2. 需求进入实现前（gate 阶段）——报告 `gate=blocked`（critical 未闭合）时不得直接进实现；
-3. 重大方向/取舍决策前。
-
-用量自动记录到 `.pi/grill/usage.jsonl`，`/grill-log usage` 可查。
-
-## 工作流（v0.3.4 一问一答）
-
-```
-/grilling  [用户触发]
-  ├─ ① 收集拷问材料（指定文件或最近会话 → .pi/grill/context-*.md），生成会话级 runId（UUIDv4）
-  ├─ ② 轮询循环（≤8 轮）：
-  │     spawn griller（材料 + 完整问答历史）→ 提出**唯一一问**（引用闸门 + 追问性）
-  │     → 注入 [grill-me 拷问回合] → 主 agent 调用 grill_answer 作答
-  │     → agent_settled 缺口补催（≤2 次）→ 下一轮
-  │     拷问者判定无新漏洞可打（done=true）→ 进入终局审判
-  ├─ ③ 终局审判：griller 对每题输出 closed（是否闭合）+ judgment + 整体 summary
-  └─ ④ 交付 report-<runId>.md/.json + latest.json（原子写，owner{runId,sessionId}）
-       + usage.jsonl（sessionId 行级归属）｜报告含 gate（critical 未闭合=⛔ blocked）、闭合判定、轮次与 token 指标
-       并在会话中显示题数、gate 与全部交付文件路径；用 /grill-load 注入完整报告。
-```
-
-## 拷问的硬规则（grill-me 技能）
-
-- **引用闸门**：每一问的 why 必须引用材料原文或上一答原句（引号，≥15 字）——引不出来就是模板套话，删掉。
-- **追问性**：第 n 问必须利用第 n-1 答的未闭合点；已闭合的点认账并转移；无新漏洞可打时终止（done）。
-- **终局判定**：closed=true=正面作答且可复核（机制/数字/时限/证据）；false=敷衍（弱信号词："未验证/未知/待定/不清楚/需要调研/后续/到时候"）或明显未闭合；judgment 引用回答原文。
-- 8 个候选方向（含糊/假设/风险/替代方案/目标指标/成本收益/执行/反向）只是校准提示，**不为覆盖而问**——唯一标准是能否拆掉当前表述。
-
-## 主 agent 的选择语义
-
-- `accepted` —— 接受拷问，正面作答
-- `revised`  —— 先修正/限定方案再作答（answer 中说明修正）
-- `rejected` —— 拒绝该问题（answer 中说明理由）
-- 未调用工具的问题 → 报告记为 `skipped`（单轮最多补催两次）
-
-## 产物位置
-
-`<cwd>/.pi/grill/`：
-
-- `context-<ts>.md` — 拷问材料
-- `questions-<runId>-r<N>.json` — 每轮提问原始输出（按 runId+轮次隔离）
-- `report-<runId>.md` / `report-<runId>.json` — 交付物（按 runId 隔离）
-- `latest.json` — 最新一轮完整结构化交付物（原子写，owner{runId,sessionId}，并发最后完成者胜）
-- `usage.jsonl` — 用量历史（每行含 sessionId/rounds/gate）
-- `cleanup.log` — /grill-cleanup 操作日志
-
-## 决策记录
-
-- **2026-08-21（v0.3.4）**：终局交付无论 gate 状态都会在会话屏幕显示题数、选择统计、gate，以及 Markdown、JSON、`latest.json` 的完整路径；完整报告仍以文件为准，可用 `/grill-load` 注入后续上下文。
-- **2026-08-16（v0.3.1）**：v0.3 拷问+主 agent 讨论后重构——① 一问一答替代"一次 N 题"（batch 是发卷子不是审讯，无对话则无击穿）；② 移除 reviewer（评分职能归拷问者终局审判，子代理减半）；③ 维度软化（8 攻击面从强制清单降为校准提示，防模板化填格子）；④ 拷问承诺项落地：latest.json owner+原子写、runId=会话级 UUIDv4 稳定标识、崩溃恢复闭环（decideResume：nudge/continue/judge/repair）、/grill-cleanup --artifacts（mtime>7 天+活跃 runId 白名单+受保护文件）、critical 未闭合→gate=blocked+显式 notify、异步回调路径集成回归测试、git 锁用 commit SHA（tag 冻结）。
-- **2026-08-16（v0.3）**：落实拷问报告：gate、reviewer rubric、二轮追问、特异性校验、成本/用量记录、报告隔离、显式清理。**待验证假设**（未证）："缺乏对抗性提问是需求质量差的主因"。对照实验设计：同一需求交替 grilling vs checklist，5 个样本比较返工率/缺陷数。
-
-## 自定义
-
-包内文件是只读资源，`pi update --extensions` 会重置 git 克隆。想定制请 fork 后安装自己的 fork；或复制技能到用户目录覆盖（同名技能用户目录优先级更高）：`~/.pi/agent/skills/grill-me/SKILL.md`。
-
-## 开发
-
-仓库结构即 pi package 布局：
-
-```
-extensions/index.ts        # 插件本体（v0.3.4 一问一答）
-skills/grill-me/SKILL.md   # 拷问指南（引用闸门+追问性+终局 rubric）
-agents/griller.md          # 拷问者子代理（唯一）
-```
-
-`package.json` 的 `pi` manifest 声明三类资源；`pi.subagents.agents` 由 pi-subagents 读取。
-
-本地验证：
+评审范围与材料来源故意分离。自然语言 topic 是**不可偏离的硬范围**，不会再自动把无关的最近会话当材料。
 
 ```bash
-pi install /absolute/path/to/pi-grill-storm   # 本地路径安装
+# 推荐：明确范围 + 一个或多个文件材料
+/grilling --topic "ClickHouse sink 优化" \
+  --source src/sink/clickhouse.ts \
+  --source docs/clickhouse-sink.md
+
+# 仅在明确要求时使用最近会话材料
+/grilling --topic "ClickHouse sink 优化" --recent
+
+# 可以组合文件和显式选取的最近会话
+/grilling --topic "ClickHouse sink 优化" --source docs/design.md --recent
+
+# 兼容简写：文件同时成为材料，文件名成为范围
+/grilling PLAN.md
+
+# 自然语言范围必须配合显式材料来源
+/grilling "ClickHouse sink 优化" --recent
+
+# 强度参数
+/grilling --topic "ClickHouse sink 优化" --source src/sink/clickhouse.ts -i high
 ```
 
-测试：
+插件不会按关键词自动搜索仓库，也不会在没有 `--source` 或显式 `--recent` 时偷偷使用最近聊天记录。缺少材料时会停止并要求提供材料，而不是审查无关交付总结。一次最多指定 5 个 `--source` 文件。
 
-- `/tmp/grill-unit-test.mjs` —— 32 项纯函数单测（一轮一问解析/终局审判解析/引用闸门/gate(M7)/清理判定(M4)/恢复判定(M3)/并发原子写(M5)/报告结构）
-- `/tmp/grill-integration-test.mjs` —— 8 项集成回归（M6：完整流程在 mock API 中驱动，async-complete 事件**无 ctx.cwd** 复刻真实回调，断言轮次推进/报告/owner/sessionId）
-- `/tmp/grill-load-test.mjs` —— 扩展注册 mock 测试
-- `/tmp/grill-e2e-test.mjs` —— 真实模型全链路（一问一答多轮）
+其他命令：
+
+```text
+/grill-load [文件]                 # 注入此前报告，作为后续会话上下文
+/grill-cleanup [-n] [--artifacts]  # 清理受管理的遗留文件或过期产物
+/grill-log [usage]                 # 查看当前状态或用量历史
+```
+
+## 选项与作答契约
+
+每个问题包含：
+
+- 一个直接影响声明范围的决策问题。
+- `A` 至 `E`：2–5 个常规选项，ID 连续、选项互斥，每项均说明关键前提、代价或后果。
+- `OTHER`：仅 griller 设置 `allowOther=true` 时出现；它**不计入** 2–5 个常规选项，且必须填写具体替代方案。开启它还必须用 `otherRationale` 引用材料，说明 A-E 为什么无法覆盖合理路径。
+- `scopeLink`：明确说明问题为何直接影响本次范围，包含声明的范围文本，并额外指向材料中的具体机制、代码路径、数值或约束。
+- `decisionAxis`：本题唯一的取舍轴；题干、决策轴和去掉范围标题后的 `scopeLink` 都必须各自与允许材料或上一轮真实选择理由关联，不能只借 `why` 引文背书。
+- `axisValue`：每个 A-E 选项在同一决策轴上的原子互斥取值。插件拒绝重复、包含或可叠加的伪单选项。
+- `why`：证据说明。`medium`、`high`、`max` 下必须引用至少 15 个字符的允许材料正文或上一轮真实选择理由。
+
+主 agent 对当前题调用一次 `grill_answer`：
+
+```text
+questionId         # 必须是当前题 ID
+selectedOptionId   # A-E 之一；仅开放时可选 OTHER
+reason             # 为什么该选择能正面处理该题
+otherAnswer        # 仅 selectedOptionId=OTHER 时必填
+```
+
+工具会拒绝历史题 ID、空理由、当前题未提供的选项、未开放的 `OTHER`、选择 `OTHER` 却未自由填写，以及常规选项同时夹带 `otherAnswer` 的调用。
+
+## 强度
+
+| 档位 | 基准轮数 | 额外规则 |
+| --- | ---: | --- |
+| `low` | 6 | 引用为建议；可提前结束；仅 critical 审判从严。 |
+| `medium` | 12 | 引用闸门与追问性。默认。 |
+| `high` | 18 | medium + 承诺跟踪。 |
+| `max` | 30 | high + 对看似已闭合选择提出反例；30 轮封顶。 |
+
+材料深度会调整常规上限：小于 5 KB 为 x0.6，5–20 KB 为 x1.0，大于 20 KB 为 x1.3；`max` 不超过 30。测试或演示可用 `GRILL_MAX_ROUNDS` 覆盖。
+
+## 工作流
+
+```text
+/grilling --topic + --source/--recent
+  -> 写入范围契约和允许材料清单
+  -> griller 只在该范围内提出一题，附 2-5 个 A-E 选项和可选 OTHER
+  -> 主 agent 通过 grill_answer 单选并说明理由
+  -> griller 只沿同一范围内未闭合的选择后果追问
+  -> 终局审判校验选择是否合法、理由是否真正闭合问题
+  -> 写入 report-<runId>.md、report-<runId>.json、latest.json、usage.jsonl
+```
+
+完成消息始终显示题数、gate 及 Markdown、JSON、`latest.json` 的完整路径。使用 `/grill-load` 注入完整报告。
+
+## Gate
+
+critical 问题未有效选择、被跳过或终局未闭合时，`gate=blocked`。选择普通 A–E 不是自动通过：选择理由仍必须给出可复核的机制、数字、时限或证据。
+
+如果终局审判失败，critical 题保守判为未闭合，不会被“文本够长”之类的启发式放行。v0.3.x 的未完成自由文本会话无法安全迁移为单选会话，需重新运行 `/grilling`；已完成的旧报告仍可通过 `/grill-load` 读取。
+
+## 产物
+
+所有产物位于 `<cwd>/.pi/grill/`：
+
+- `context-<ts>-<id>.md`：范围契约与选取的材料。
+- `evidence-<ts>-<id>.md`：仅原始材料正文，用于引文校验，不含插件生成的范围模板。
+- `questions-<runId>-r<N>.json`：每轮原始提问输出。
+- `report-<runId>.md` / `report-<runId>.json`：完整交付物。
+- `latest.json`：原子写入的最新结构化报告，含 owner 信息。
+- `usage.jsonl`：用量历史。
+- `cleanup.log`：清理操作记录。
+
+## 开发与测试
+
+```bash
+pi install /absolute/path/to/pi-grill-storm
+npm test
+pi -e ./extensions/index.ts --list-models
+```
+
+仓库内的契约测试覆盖：2/5 选项边界、连续 A-E、唯一决策轴与伪单选拒绝、`OTHER` 覆盖缺口、显式 source/recent 范围隔离、生成范围头不能伪装为证据、范围外题干拒绝、历史理由引用、critical 无终局审判时 gate 阻断、重复题号、重复完成事件只交付一次、报告序列化和恢复决策。
+
+## 变更记录
+
+- **2026-08-21（v0.4.0）**：以范围受控的 A-E 单选题替代自由文本 `accepted/revised/rejected` 状态；支持按需 `OTHER` 自由填写；引入显式 topic/source、选择感知的审判/报告/恢复，以及提交到仓库的契约测试。
+- **2026-08-21（v0.3.4）**：完成交付会显示统计、gate 和 Markdown/JSON/`latest.json` 路径。
+- **2026-08-16（v0.3.1）**：从批量审查改为一问一答追问，并将终局审查收敛给 griller。

@@ -1,7 +1,10 @@
 {
   "name": "pi-grill-storm",
-  "version": "0.3.4",
-  "description": "grill-storm：subagent 以 grill-me 技能拷问主 agent 的计划/设计，主 agent 自动逐题选择（接受/修订后接受/拒绝）并作答，交付完整问题清单+回答报告，可注入后续会话复用。",
+  "version": "0.4.0",
+  "description": "grill-storm：范围受控的 grill-me 决策拷问，子代理每轮提出一题和 2-5 个选项，主 agent 单选并说明理由，交付可复核的选择与终局判定报告。",
+  "scripts": {
+    "test": "node --experimental-strip-types test/contract.test.mjs"
+  },
   "keywords": [
     "pi-package",
     "pi-extension",

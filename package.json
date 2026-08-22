@@ -1,7 +1,7 @@
 {
   "name": "pi-grill-storm",
-  "version": "0.4.0",
-  "description": "grill-storm：范围受控的 grill-me 决策拷问，子代理每轮提出一题和 2-5 个选项，主 agent 单选并说明理由，交付可复核的选择与终局判定报告。",
+  "version": "0.5.0",
+  "description": "grill-storm：自动采集当前会话与工作区上下文后执行范围受控的 grill-me 决策拷问，每题给出 2-5 个选项，交付可审计来源清单、选择与终局判定报告。",
   "scripts": {
     "test": "node --experimental-strip-types test/contract.test.mjs"
   },
